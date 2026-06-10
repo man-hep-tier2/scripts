@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import pathlib, os, argparse, datetime, rados
-from sys import stderr
+from sys import stderr, stdout
 from xattr import getxattr
 import cephfs as libcephfs
 from math import ceil
 from struct import unpack
 from zlib import adler32
+from io import BufferedWriter
 
 def log_stderr(msg):
     print(msg, file=stderr)
@@ -150,6 +151,11 @@ class CephfsFile:
     def stat_object_at_index(self, index):
         return self.stat_object(self.object_at_index(index))
 
+    def get(self, fp):
+        for o in self.objects:
+            for c in self.read_object(o):
+                fp.write(c)
+
     @property
     def stats(self):
         if self._stats is None:
@@ -207,6 +213,8 @@ def parse_cmdline():
     parser.add_argument('--adler32', help='Calculate adler32 checksum from objects', action='store_true')
     parser.add_argument('--check-adler32', help='Compare the calculated adler32 checksum with the metadata', action='store_true')
     parser.add_argument('--chunksize', help='Specify the default chunk size for read operations', type=int, default=1024**2)
+    parser.add_argument('--get', help='Writes the file content to stdout or to the specified file (--out-file option)', action='store_true')
+    parser.add_argument('--out-file', help='The name of the file to write to.', type=pathlib.Path)
     args = parser.parse_args()
     return args
 
@@ -227,28 +235,27 @@ def main():
     file = CephfsFile(str(args.path), rados=cluster, cephfs=fs, chunksize=args.chunksize)
     if args.info:
         info(file)
-        return 0
     if args.list_objects:
         for o in file.objects:
             print(o)
-        return 0
     if args.missing_objects:
         for o in file.objects:
             try:
                 file.stat_object(o)
             except rados.ObjectNotFound:
                 print(o)
-        return 0
     if args.adler32:
         print(file.adler32)
-        return 0
     if args.check_adler32:
         print(f'(meta,data,equal): ({file.adler32_xattr.checksum_hex},{file.adler32},{file.adler32_xattr.checksum_hex == file.adler32})')
-        return 0
-#    print(file.stat_object_at_index(50))
-#    fs = b''
-#    for chunk in file.read_object_at_index(50):
-#        fs += chunk
-#    print(len(fs))
+    if args.get:
+        if args.out_file:
+            if args.out_file.exists():
+                log_stderr_and_exit(f'file {str(args.out_file)} already exists, refusing to overwrite it', 1)
+            with args.out_file.open('wb') as f:
+                file.get(f)
+        else:
+            file.get(BufferedWriter(stdout.buffer))
+
 if __name__ == '__main__':
     main()
