@@ -20,8 +20,8 @@ def rados_connect(conffile=''):
     cluster.connect()
     return cluster
 
-def cephfs_connect(conffile='', fsname=None):
-    fs = libcephfs.LibCephFS(conffile=conffile)
+def cephfs_connect(rados, fsname=None):
+    fs = libcephfs.LibCephFS(rados_inst=rados)
     fs.mount(filesystem_name=fsname)
     return fs
 
@@ -228,10 +228,26 @@ def info(file):
         print(f'adler32 xattr mtime: {a32.mtime}')
         print(f'adler32 xattr delta: {a32.delta}')
 
+def get(file):
+    if args.out_file:
+        if args.out_file.exists():
+            log_stderr_and_exit(f'file {str(args.out_file)} already exists, refusing to overwrite it', 1)
+        with args.out_file.open('wb') as f:
+            file.get(f)
+    else:
+        file.get(BufferedWriter(stdout.buffer))
+
+def print_missing(file):
+    for o in file.objects:
+        try:
+            file.stat_object(o)
+        except rados.ObjectNotFound:
+            print(o)
+
 def main():
     args = parse_cmdline()
     cluster = rados_connect()
-    fs = cephfs_connect()
+    fs = cephfs_connect(cluster)
     file = CephfsFile(str(args.path), rados=cluster, cephfs=fs, chunksize=args.chunksize)
     if args.info:
         info(file)
@@ -239,23 +255,13 @@ def main():
         for o in file.objects:
             print(o)
     if args.missing_objects:
-        for o in file.objects:
-            try:
-                file.stat_object(o)
-            except rados.ObjectNotFound:
-                print(o)
+        print_missing(file)
     if args.adler32:
         print(file.adler32)
     if args.check_adler32:
         print(f'(meta,data,equal): ({file.adler32_xattr.checksum_hex},{file.adler32},{file.adler32_xattr.checksum_hex == file.adler32})')
     if args.get:
-        if args.out_file:
-            if args.out_file.exists():
-                log_stderr_and_exit(f'file {str(args.out_file)} already exists, refusing to overwrite it', 1)
-            with args.out_file.open('wb') as f:
-                file.get(f)
-        else:
-            file.get(BufferedWriter(stdout.buffer))
+        get(file)
 
 if __name__ == '__main__':
     main()
